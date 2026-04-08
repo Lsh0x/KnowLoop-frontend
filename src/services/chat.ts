@@ -9,6 +9,9 @@ import type {
   CreateSessionResponse,
   DetachedSession,
   DetectPathResponse,
+  ForkConfig,
+  ForkInfo,
+  ForkResponse,
   PaginatedResponse,
   MessageHistoryResponse,
   MessageSearchResult,
@@ -34,6 +37,13 @@ interface SearchMessagesParams {
   q: string
   project_slug?: string
   limit?: number
+}
+
+interface ListForksParams {
+  status?: string
+  search?: string
+  limit?: number
+  offset?: number
 }
 
 export const chatApi = {
@@ -102,4 +112,37 @@ export const chatApi = {
   /** Get agent execution records for a plan run */
   getAgentExecutions: (runId: string) =>
     api.get<AgentExecution[]>(`/runs/${runId}/agent-executions`),
+
+  // Fork / Sub-conversation management
+  /** Fork a session into a child sub-conversation */
+  forkSession: (sessionId: string, config: ForkConfig) =>
+    api.post<ForkResponse>(`/chat/sessions/${sessionId}/fork`, config),
+
+  /** List fork children of a session (paginated) */
+  listForks: (sessionId: string, params: ListForksParams = {}) =>
+    api.get<PaginatedResponse<ForkInfo>>(`/chat/sessions/${sessionId}/forks${buildQuery(params)}`),
+
+  /** Close a fork child (complete or cancel) */
+  closeFork: (sessionId: string, forkId: string, cancel = false) =>
+    api.deleteWithBody(`/chat/sessions/${sessionId}/forks/${forkId}`, { cancel }),
+
+  // Model switching (mid-session or idle)
+  /** Switch the LLM model for a session (active or idle) */
+  switchModel: (sessionId: string, model: string) =>
+    api.put<{ model: string; active: boolean }>(`/chat/sessions/${sessionId}/model`, { model }),
+
+  // Persona management on sessions
+  /** Activate a persona on a chat session */
+  // TODO: Confirm backend endpoint exists — POST /chat/sessions/{id}/persona
+  activateSessionPersona: (sessionId: string, personaId: string) =>
+    api.post(`/chat/sessions/${sessionId}/persona`, { persona_id: personaId }),
+
+  /** Clear the active persona on a chat session */
+  // TODO: Confirm backend endpoint exists — DELETE /chat/sessions/{id}/persona
+  clearSessionPersona: (sessionId: string) =>
+    api.delete(`/chat/sessions/${sessionId}/persona`),
+
+  /** Archive a session (marks archived + triggers feedback summary) */
+  archiveSession: (sessionId: string) =>
+    api.post<{ archived: boolean }>(`/chat/sessions/${sessionId}/archive`, {}),
 }

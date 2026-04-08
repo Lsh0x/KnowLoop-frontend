@@ -1,7 +1,9 @@
 import { memo, useState, useEffect } from 'react'
 import { PulseIndicator } from '@/components/ui'
-import { ChevronDown, ChevronUp, Eye, Square, Clock, DollarSign } from 'lucide-react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import { AgentExecutionDetail } from '@/components/runner/AgentExecutionDetail'
+import { ChildRow } from './ChildRow'
+import type { ChildRowData, ChildRowStatus } from './ChildRow'
 import { chatApi } from '@/services/chat'
 import type { AgentExecution } from '@/types'
 import type { DetachedRun } from '@/hooks'
@@ -39,21 +41,24 @@ function useAgentExecutions(runId: string | undefined) {
   return { executions, loading }
 }
 
-function formatDuration(startedAt: string): string {
-  const start = new Date(startedAt)
-  const now = new Date()
-  const diffMs = now.getTime() - start.getTime()
-  const diffSecs = Math.floor(diffMs / 1000)
-  if (diffSecs < 60) return `${diffSecs}s`
-  const diffMins = Math.floor(diffSecs / 60)
-  if (diffMins < 60) return `${diffMins}m`
-  const diffHours = Math.floor(diffMins / 60)
-  return `${diffHours}h ${diffMins % 60}m`
-}
+// ---------------------------------------------------------------------------
+// Helper: convert DetachedRun -> ChildRowData
+// ---------------------------------------------------------------------------
 
-function formatCost(cost?: number): string | null {
-  if (!cost) return null
-  return `$${cost.toFixed(2)}`
+function toChildRowData(run: DetachedRun): ChildRowData {
+  const status: ChildRowStatus = run.isStreaming
+    ? 'active'
+    : (run.forkStatus === 'cancelled' ? 'cancelled' : 'completed')
+  return {
+    sessionId: run.sessionId,
+    title: run.title,
+    intent: run.forkIntent,
+    status,
+    startedAt: run.startedAt,
+    model: run.model,
+    costUsd: run.costUsd,
+    isStreaming: run.isStreaming,
+  }
 }
 
 /**
@@ -87,66 +92,26 @@ function RunRow({
 
   return (
     <div>
-      <div
-        onClick={run.runId ? onToggleExpand : undefined}
-        className={`flex items-center gap-2 px-2 py-1.5 rounded-md bg-white/[0.02] hover:bg-white/[0.04] transition-colors group ${run.runId ? 'cursor-pointer' : ''}`}
-      >
-        {/* Status indicator */}
-        {run.isStreaming ? (
-          <PulseIndicator variant="active" size={6} />
-        ) : (
-          <span className="w-1.5 h-1.5 rounded-full bg-gray-500 shrink-0" />
-        )}
-
-        {/* Run info */}
-        <div className="flex-1 min-w-0">
-          <span className="text-xs text-gray-300 truncate block">
-            {run.title}
-          </span>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className="inline-flex items-center gap-0.5 text-[10px] text-gray-500">
-              <Clock className="w-2.5 h-2.5" />
-              {formatDuration(run.startedAt)}
-            </span>
-            {formatCost(run.costUsd) && (
-              <span className="inline-flex items-center gap-0.5 text-[10px] text-gray-500">
-                <DollarSign className="w-2.5 h-2.5" />
-                {formatCost(run.costUsd)}
-              </span>
-            )}
-            <span className="text-[10px] text-gray-600 truncate max-w-[60px]">
-              {run.model}
-            </span>
-          </div>
-        </div>
-
-        {/* Expand indicator */}
-        {run.runId && (
-          isExpanded
-            ? <ChevronUp className="w-3 h-3 text-gray-500 shrink-0" />
-            : <ChevronDown className="w-3 h-3 text-gray-500 shrink-0" />
-        )}
-
-        {/* Actions */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button
-            onClick={(e) => { e.stopPropagation(); onViewRun(run.sessionId) }}
-            className="p-1 rounded text-gray-500 hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors"
-            title="View run"
-          >
-            <Eye className="w-3.5 h-3.5" />
-          </button>
-          {run.isStreaming && (
+      <ChildRow
+        variant="compact"
+        data={toChildRowData(run)}
+        onClick={onViewRun}
+        onStop={(_e, sid) => onStopRun(sid)}
+        trailing={
+          run.runId ? (
             <button
-              onClick={(e) => { e.stopPropagation(); onStopRun(run.sessionId) }}
-              className="p-1 rounded text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-              title="Stop run"
+              onClick={(e) => { e.stopPropagation(); onToggleExpand() }}
+              className="p-0.5 rounded text-gray-500 hover:text-gray-300 hover:bg-white/[0.06] transition-colors shrink-0"
+              title="Execution details"
             >
-              <Square className="w-3 h-3" />
+              {isExpanded
+                ? <ChevronUp className="w-3 h-3" />
+                : <ChevronDown className="w-3 h-3" />
+              }
             </button>
-          )}
-        </div>
-      </div>
+          ) : undefined
+        }
+      />
 
       {/* Expanded: agent execution details */}
       {isExpanded && (
@@ -180,12 +145,42 @@ export const DetachedRunsPanel = memo(function DetachedRunsPanel({
   onStopRun,
 }: DetachedRunsPanelProps) {
   const [expanded, setExpanded] = useState(false)
+  const [showActive, setShowActive] = useState(true)
+  const [showDone, setShowDone] = useState(false)
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null)
 
   if (runs.length === 0) return null
 
-  const activeCount = runs.filter(r => r.isStreaming).length
-  const completedCount = runs.length - activeCount
+  // Sort: streaming first, then by startedAt desc
+  const sortedRuns = [...runs].sort((a, b) => {
+    if (a.isStreaming !== b.isStreaming) return a.isStreaming ? -1 : 1
+    return new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
+  })
+
+  // Separate active vs done
+  const activeItems = sortedRuns.filter(r => r.isStreaming)
+  const doneItems = sortedRuns.filter(r => !r.isStreaming)
+
+  // Simple counts by type
+  const totalRuns = sortedRuns.filter(r => !r.isFork).length
+  const totalSubchats = sortedRuns.filter(r => r.isFork).length
+
+  // Build a simple header: "N subchats · M runs"
+  const summaryParts: string[] = []
+  if (totalSubchats > 0) summaryParts.push(`${totalSubchats} subchat${totalSubchats > 1 ? 's' : ''}`)
+  if (totalRuns > 0) summaryParts.push(`${totalRuns} run${totalRuns > 1 ? 's' : ''}`)
+
+  const renderGroup = (items: typeof sortedRuns) =>
+    items.map(run => (
+      <RunRow
+        key={run.sessionId}
+        run={run}
+        isExpanded={expandedRunId === run.sessionId}
+        onToggleExpand={() => setExpandedRunId(prev => prev === run.sessionId ? null : run.sessionId)}
+        onViewRun={onViewRun}
+        onStopRun={onStopRun}
+      />
+    ))
 
   return (
     <div className="border-b border-white/[0.06] bg-amber-500/[0.03]">
@@ -196,15 +191,8 @@ export const DetachedRunsPanel = memo(function DetachedRunsPanel({
       >
         {hasActiveRuns && <PulseIndicator variant="pending" size={6} />}
         <span className="text-xs text-amber-400 font-medium">
-          {activeCount > 0
-            ? `${activeCount} run${activeCount > 1 ? 's' : ''} in progress`
-            : `${completedCount} run${completedCount > 1 ? 's' : ''} completed`}
+          {summaryParts.join(' · ')}
         </span>
-        {completedCount > 0 && activeCount > 0 && (
-          <span className="text-[10px] text-gray-500">
-            · {completedCount} done
-          </span>
-        )}
         <div className="flex-1" />
         {expanded ? (
           <ChevronUp className="w-3.5 h-3.5 text-gray-500" />
@@ -213,19 +201,46 @@ export const DetachedRunsPanel = memo(function DetachedRunsPanel({
         )}
       </button>
 
-      {/* Expanded run list */}
+      {/* Expanded: grouped by active / done with toggles */}
       {expanded && (
-        <div className="px-2 pb-2 space-y-1 max-h-80 overflow-y-auto">
-          {runs.map(run => (
-            <RunRow
-              key={run.sessionId}
-              run={run}
-              isExpanded={expandedRunId === run.sessionId}
-              onToggleExpand={() => setExpandedRunId(prev => prev === run.sessionId ? null : run.sessionId)}
-              onViewRun={onViewRun}
-              onStopRun={onStopRun}
-            />
-          ))}
+        <div className="px-2 pb-2 max-h-80 overflow-y-auto">
+          {/* Active group */}
+          {activeItems.length > 0 && (
+            <div className="mb-1">
+              <button
+                onClick={() => setShowActive(!showActive)}
+                className="flex items-center gap-1.5 w-full text-[10px] text-amber-400/80 hover:text-amber-300 transition-colors py-1 px-1"
+              >
+                <ChevronDown className={`w-2.5 h-2.5 transition-transform ${showActive ? '' : '-rotate-90'}`} />
+                <PulseIndicator variant="active" size={5} />
+                <span className="font-medium">Active ({activeItems.length})</span>
+              </button>
+              {showActive && (
+                <div className="space-y-1 mt-0.5">
+                  {renderGroup(activeItems)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Done group */}
+          {doneItems.length > 0 && (
+            <div>
+              <button
+                onClick={() => setShowDone(!showDone)}
+                className="flex items-center gap-1.5 w-full text-[10px] text-gray-500 hover:text-gray-400 transition-colors py-1 px-1"
+              >
+                <ChevronDown className={`w-2.5 h-2.5 transition-transform ${showDone ? '' : '-rotate-90'}`} />
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-500 shrink-0" />
+                <span className="font-medium">Done ({doneItems.length})</span>
+              </button>
+              {showDone && (
+                <div className="space-y-1 mt-0.5">
+                  {renderGroup(doneItems)}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

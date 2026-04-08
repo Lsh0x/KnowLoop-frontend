@@ -136,6 +136,10 @@ export interface DetachedSession {
   total_cost_usd?: number
   spawned_by: SpawnedBy
   is_streaming: boolean
+  /** Fork intent classification (job/role/scope/unknown) — only set on fork children */
+  fork_intent?: string | null
+  /** Fork lifecycle status (active/completed/cancelled) — only set on fork children */
+  fork_status?: string | null
 }
 
 export interface ChatSession {
@@ -158,6 +162,10 @@ export interface ChatSession {
   add_dirs?: string[]
   /** Origin of this session if detached (null = normal conversation) */
   spawned_by?: SpawnedBy | null
+  /** Fork lifecycle status (active/completed/cancelled) — only set on fork sessions */
+  fork_status?: string | null
+  /** Fork intent classification (job/role/scope/unknown) — determines lifecycle policy */
+  fork_intent?: string | null
 }
 
 export interface CreateSessionRequest {
@@ -356,6 +364,51 @@ export interface SessionInfo {
   updated_at?: string | null
   total_cost_usd?: number | null
   is_streaming: boolean
+}
+
+// ============================================================================
+// FORK / SUB-CONVERSATION TYPES
+// ============================================================================
+
+/** How a fork was initiated */
+export type ForkType = 'agent' | 'user'
+
+/** Lifecycle status of a forked session */
+export type ForkStatus = 'active' | 'completed' | 'cancelled'
+
+/** Configuration for creating a fork */
+export interface ForkConfig {
+  fork_type: ForkType
+  task_id?: string
+  persona?: string
+  initial_message?: string
+  model?: string
+  max_depth?: number
+}
+
+/** Response from POST /api/chat/sessions/{id}/fork */
+export interface ForkResponse {
+  session_id: string
+  fork_depth: number
+  fork_type: ForkType
+  fork_status: ForkStatus
+  fork_intent: ForkIntent
+}
+
+/** Fork intent classification */
+export type ForkIntent = 'job' | 'role' | 'scope' | 'unknown'
+
+/** Summary of a fork child (from GET /api/chat/sessions/{id}/forks) */
+export interface ForkInfo {
+  session_id: string
+  fork_depth: number
+  fork_type?: string
+  fork_status?: string
+  fork_intent?: string
+  title?: string
+  model?: string
+  created_at: string
+  message_count: number
 }
 
 // ============================================================================

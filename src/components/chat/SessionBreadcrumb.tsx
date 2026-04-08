@@ -1,22 +1,58 @@
 /**
- * SessionBreadcrumb — shows the parent chain for spawned sessions.
+ * SessionBreadcrumb — shows the parent chain for sub-conversations (spawned or forked).
  *
  * Displays: Root Session > Agent Task X > Sub-agent Y
  * Each segment is clickable to navigate to that session.
- * Only visible when the current session has `spawned_by`.
+ * Visible whenever the current session has a parent (spawned or user fork).
+ *
+ * If `rootSessionId` is not provided, the component walks up the parent chain
+ * via `chatApi.getSession()` to discover the root, then fetches the full tree.
  */
 
 import { ChevronRight } from 'lucide-react'
 import { useSessionTree } from '@/hooks'
-import type { SessionTreeNode } from '@/types'
+import { chatApi } from '@/services/chat'
+import type { SessionTreeNode, SpawnedBy } from '@/types'
+import { useState, useEffect } from 'react'
 
 interface SessionBreadcrumbProps {
   /** Current session ID */
   sessionId: string
-  /** Root session ID to fetch the tree from */
-  rootSessionId: string
+  /** Root session ID to fetch the tree from (optional — will be computed if omitted) */
+  rootSessionId?: string
   /** Called when a breadcrumb segment is clicked */
   onNavigate: (sessionId: string) => void
+}
+
+/**
+ * Walk up the parent chain via API calls to find the root session.
+ * Returns the root session ID (the one with no parent).
+ */
+async function resolveRootSessionId(sessionId: string): Promise<string> {
+  let currentId = sessionId
+  const visited = new Set<string>()
+
+  // Walk up at most 10 levels to avoid infinite loops
+  for (let i = 0; i < 10; i++) {
+    if (visited.has(currentId)) break
+    visited.add(currentId)
+
+    try {
+      const session = await chatApi.getSession(currentId)
+      const spawnedBy = session.spawned_by as SpawnedBy | null | undefined
+      if (spawnedBy && spawnedBy.type === 'conversation' && spawnedBy.parent_session_id) {
+        currentId = spawnedBy.parent_session_id
+      } else {
+        // No parent — this is the root
+        break
+      }
+    } catch {
+      // API failure — treat current as root
+      break
+    }
+  }
+
+  return currentId
 }
 
 /**
@@ -45,8 +81,24 @@ function buildPath(tree: SessionTreeNode[], targetId: string): SessionTreeNode[]
   return path
 }
 
-export function SessionBreadcrumb({ sessionId, rootSessionId, onNavigate }: SessionBreadcrumbProps) {
-  const { tree } = useSessionTree(rootSessionId)
+export function SessionBreadcrumb({ sessionId, rootSessionId: rootProp, onNavigate }: SessionBreadcrumbProps) {
+  const [resolvedRoot, setResolvedRoot] = useState<string | undefined>(rootProp)
+
+  // If rootSessionId is not provided, resolve it by walking up the parent chain
+  useEffect(() => {
+    if (rootProp) {
+      setResolvedRoot(rootProp)
+      return
+    }
+
+    let cancelled = false
+    resolveRootSessionId(sessionId).then((rootId) => {
+      if (!cancelled) setResolvedRoot(rootId)
+    })
+    return () => { cancelled = true }
+  }, [sessionId, rootProp])
+
+  const { tree } = useSessionTree(resolvedRoot)
 
   if (tree.length === 0) return null
 

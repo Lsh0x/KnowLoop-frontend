@@ -15,6 +15,12 @@ export interface DetachedRun {
   planId?: string
   /** If spawned by a runner, the run ID */
   runId?: string
+  /** True if this is a fork child (spawned_by.type === 'conversation') */
+  isFork: boolean
+  /** Fork intent classification (job/role/scope/unknown) — only on forks */
+  forkIntent?: string | null
+  /** Fork lifecycle status (active/completed/cancelled) — only on forks */
+  forkStatus?: string | null
 }
 
 interface UseDetachedRunsResult {
@@ -38,6 +44,9 @@ function toDetachedRun(s: DetachedSession): DetachedRun {
     startedAt: s.created_at,
     planId: s.spawned_by?.type === 'runner' ? s.spawned_by.plan_id : undefined,
     runId: s.spawned_by?.type === 'runner' ? s.spawned_by.run_id : undefined,
+    isFork: s.spawned_by?.type === 'conversation',
+    forkIntent: s.fork_intent ?? null,
+    forkStatus: s.fork_status ?? null,
   }
 }
 

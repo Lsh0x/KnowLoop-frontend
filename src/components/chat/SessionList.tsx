@@ -12,6 +12,7 @@ import type {
   SpawnedBy,
 } from '@/types'
 import { Select, PulseIndicator } from '@/components/ui'
+import { ForkChildren } from './ForkChildren'
 import { Folder, Trash2, Search, X, Loader2, ChevronRight, MessageCircle, Play, GitBranch, ChevronDown, Clock, Pencil } from 'lucide-react'
 
 interface SessionListProps {
@@ -61,12 +62,16 @@ function getDateGroup(dateStr: string): DateGroup {
   return 'Older'
 }
 
-function groupSessionsByDate(sessions: ChatSession[]): { group: DateGroup; sessions: ChatSession[] }[] {
+function groupSessionsByDate(
+  sessions: ChatSession[],
+  getTimestamp?: (s: ChatSession) => string,
+): { group: DateGroup; sessions: ChatSession[] }[] {
   const groups = new Map<DateGroup, ChatSession[]>()
   const order: DateGroup[] = ['Today', 'Yesterday', 'This week', 'This month', 'Older']
 
   for (const session of sessions) {
-    const group = getDateGroup(session.updated_at)
+    const ts = getTimestamp ? getTimestamp(session) : session.updated_at
+    const group = getDateGroup(ts)
     if (!groups.has(group)) groups.set(group, [])
     groups.get(group)!.push(session)
   }
@@ -110,10 +115,37 @@ function formatDuration(startedAt: string): string {
 }
 
 function ChildrenIndicator({ sessionId, onSelect }: { sessionId: string; onSelect: (id: string, turnIndex?: number, title?: string) => void }) {
-  const { runs, isLoading } = useDetachedRuns(sessionId)
+  const { runs: allRuns, isLoading } = useDetachedRuns(sessionId)
   const [expanded, setExpanded] = useState(false)
+  const [showActive, setShowActive] = useState(true)
+  const [showDone, setShowDone] = useState(false)
+
+  // Filter out fork children (spawned_by.type === 'conversation') — those are shown by ForkChildren
+  const runs = allRuns.filter(r => !r.isFork)
 
   if (isLoading || runs.length === 0) return null
+
+  const activeRuns = runs.filter(r => r.isStreaming)
+  const doneRuns = runs.filter(r => !r.isStreaming)
+
+  const renderRun = (run: typeof runs[0]) => (
+    <button
+      key={run.sessionId}
+      onClick={(e) => { e.stopPropagation(); onSelect(run.sessionId, undefined, run.title) }}
+      className="w-full text-left flex items-center gap-1.5 py-0.5 hover:bg-white/[0.04] rounded px-1 transition-colors group/child"
+    >
+      {run.isStreaming ? (
+        <PulseIndicator variant="active" size={6} />
+      ) : (
+        <span className="w-1.5 h-1.5 rounded-full bg-gray-600 shrink-0" />
+      )}
+      <span className="text-[10px] text-gray-400 truncate flex-1">{run.title}</span>
+      <span className="flex items-center gap-0.5 text-[9px] text-gray-600 shrink-0">
+        <Clock className="w-2.5 h-2.5" />
+        {formatDuration(run.startedAt)}
+      </span>
+    </button>
+  )
 
   return (
     <div className="mt-0.5">
@@ -122,30 +154,49 @@ function ChildrenIndicator({ sessionId, onSelect }: { sessionId: string; onSelec
         className="flex items-center gap-1 text-[10px] text-amber-400/80 hover:text-amber-300 transition-colors"
       >
         <ChevronDown className={`w-2.5 h-2.5 transition-transform ${expanded ? '' : '-rotate-90'}`} />
-        <PulseIndicator variant="pending" size={6} />
-        <span>{runs.length} child{runs.length > 1 ? 'ren' : ''}</span>
+        {activeRuns.length > 0 && <PulseIndicator variant="pending" size={6} />}
+        <span>
+          {activeRuns.length > 0 ? `${activeRuns.length} active` : ''}
+          {activeRuns.length > 0 && doneRuns.length > 0 ? ' · ' : ''}
+          {doneRuns.length > 0 ? `${doneRuns.length} done` : ''}
+        </span>
       </button>
 
       {expanded && (
-        <div className="ml-2 mt-1 border-l border-white/[0.06] pl-2 space-y-0.5">
-          {runs.map((run) => (
-            <button
-              key={run.sessionId}
-              onClick={(e) => { e.stopPropagation(); onSelect(run.sessionId, undefined, run.title) }}
-              className="w-full text-left flex items-center gap-1.5 py-0.5 hover:bg-white/[0.04] rounded px-1 transition-colors group/child"
-            >
-              {run.isStreaming ? (
-                <PulseIndicator variant="active" size={6} />
-              ) : (
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-600 shrink-0" />
+        <div className="ml-2 mt-1 border-l border-white/[0.06] pl-2">
+          {/* Active group */}
+          {activeRuns.length > 0 && (
+            <div className="mb-0.5">
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowActive(!showActive) }}
+                className="flex items-center gap-1 w-full text-[9px] text-amber-400/70 hover:text-amber-300 transition-colors py-0.5"
+              >
+                <ChevronDown className={`w-2 h-2 transition-transform ${showActive ? '' : '-rotate-90'}`} />
+                <PulseIndicator variant="active" size={4} />
+                <span className="font-medium">Active ({activeRuns.length})</span>
+              </button>
+              {showActive && (
+                <div className="space-y-0.5">{activeRuns.map(renderRun)}</div>
               )}
-              <span className="text-[10px] text-gray-400 truncate flex-1">{run.title}</span>
-              <span className="flex items-center gap-0.5 text-[9px] text-gray-600 shrink-0">
-                <Clock className="w-2.5 h-2.5" />
-                {formatDuration(run.startedAt)}
-              </span>
-            </button>
-          ))}
+            </div>
+          )}
+
+          {/* Done group */}
+          {doneRuns.length > 0 && (
+            <div>
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowDone(!showDone) }}
+                className="flex items-center gap-1 w-full text-[9px] text-gray-500 hover:text-gray-400 transition-colors py-0.5"
+              >
+                <ChevronDown className={`w-2 h-2 transition-transform ${showDone ? '' : '-rotate-90'}`} />
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-500 shrink-0" />
+                <span className="font-medium">Done ({doneRuns.length})</span>
+              </button>
+              {showDone && (
+                <div className="space-y-0.5">{doneRuns.map(renderRun)}</div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -158,6 +209,9 @@ function ChildrenIndicator({ sessionId, onSelect }: { sessionId: string; onSelec
 
 export const SessionList = memo(function SessionList({ activeSessionId, onSelect, onClose, embedded }: SessionListProps) {
   const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [activeForkCounts, setActiveForkCounts] = useState<Record<string, number>>({})
+  /** Latest fork activity timestamp per parent session (ISO string) — used to bubble parents up in sort order */
+  const [forkLatestActivity, setForkLatestActivity] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [hasMoreSessions, setHasMoreSessions] = useState(false)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
@@ -351,13 +405,37 @@ export const SessionList = memo(function SessionList({ activeSessionId, onSelect
     }
   }, [debouncedQuery, selectedProject])
 
-  // Filter out spawned sessions when toggle is off, then group by date
+  // Filter out spawned sessions when toggle is off, then re-sort accounting for
+  // sub-chat (fork) activity so parents with active forks bubble up correctly.
   const filteredSessions = useMemo(() => {
-    if (showSpawned) return sessions
-    return sessions.filter((s) => !s.spawned_by)
-  }, [sessions, showSpawned])
+    const base = showSpawned ? sessions : sessions.filter((s) => !s.spawned_by)
 
-  const groupedSessions = useMemo(() => groupSessionsByDate(filteredSessions), [filteredSessions])
+    // Build an effective "last activity" date per session: max(own updated_at, latest fork activity)
+    const withEffective = base.map((s) => {
+      const forkTs = forkLatestActivity[s.id]
+      const ownTs = new Date(s.updated_at).getTime()
+      const forkTime = forkTs ? new Date(forkTs).getTime() : 0
+      const effectiveTs = Math.max(ownTs, forkTime)
+      return { session: s, effectiveTs }
+    })
+
+    // Sort descending by effective activity timestamp
+    withEffective.sort((a, b) => b.effectiveTs - a.effectiveTs)
+    return withEffective.map((w) => w.session)
+  }, [sessions, showSpawned, forkLatestActivity])
+
+  /** Compute effective updated_at for date grouping (accounts for fork activity) */
+  const effectiveUpdatedAt = useCallback((session: ChatSession): string => {
+    const forkTs = forkLatestActivity[session.id]
+    if (!forkTs) return session.updated_at
+    const ownTime = new Date(session.updated_at).getTime()
+    const forkTime = new Date(forkTs).getTime()
+    return forkTime > ownTime ? forkTs : session.updated_at
+  }, [forkLatestActivity])
+
+  const groupedSessions = useMemo(() => {
+    return groupSessionsByDate(filteredSessions, effectiveUpdatedAt)
+  }, [filteredSessions, effectiveUpdatedAt])
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation()
@@ -436,6 +514,20 @@ export const SessionList = memo(function SessionList({ activeSessionId, onSelect
     return `$${cost.toFixed(2)}`
   }
 
+  // Track active fork counts and latest activity per session (for inline badge + sort bubbling)
+  const handleActiveForkCount = useCallback((sessionId: string, count: number, latestActivity?: string) => {
+    setActiveForkCounts(prev => {
+      if (prev[sessionId] === count) return prev
+      return { ...prev, [sessionId]: count }
+    })
+    if (latestActivity) {
+      setForkLatestActivity(prev => {
+        if (prev[sessionId] === latestActivity) return prev
+        return { ...prev, [sessionId]: latestActivity }
+      })
+    }
+  }, [])
+
   // Render a single session card
   const renderSessionCard = (session: ChatSession) => {
     const isActive = session.id === activeSessionId
@@ -459,6 +551,9 @@ export const SessionList = memo(function SessionList({ activeSessionId, onSelect
           <div className="flex items-center gap-1.5">
             {streamingSessions.has(session.id) && (
               <PulseIndicator variant="active" size={8} />
+            )}
+            {!streamingSessions.has(session.id) && (activeForkCounts[session.id] ?? 0) > 0 && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" title={`${activeForkCounts[session.id]} active subchat${activeForkCounts[session.id] > 1 ? 's' : ''}`} />
             )}
             {editingSessionId === session.id ? (
               <input
@@ -505,6 +600,9 @@ export const SessionList = memo(function SessionList({ activeSessionId, onSelect
 
           {/* Expandable children indicator */}
           <ChildrenIndicator sessionId={session.id} onSelect={onSelect} />
+
+          {/* Fork children indicator */}
+          <ForkChildren sessionId={session.id} onSelect={onSelect} onActiveCount={(count, latestActivity) => handleActiveForkCount(session.id, count, latestActivity)} />
 
           {/* CWD */}
           {session.cwd && (

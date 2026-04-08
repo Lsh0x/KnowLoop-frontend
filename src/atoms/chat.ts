@@ -1,6 +1,6 @@
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
-import type { ChatPanelMode, PermissionConfig, PermissionMode, Project, WsConnectionStatus } from '@/types'
+import type { ChatPanelMode, Persona, PermissionConfig, PermissionMode, Project, WsConnectionStatus } from '@/types'
 
 /** Hint set by pages that know which project the user is looking at */
 export const chatSuggestedProjectIdAtom = atom<string | null>(null)
@@ -60,6 +60,12 @@ export const chatWorkspaceHasProjectsAtom = atom<boolean>(false)
 
 /** Whether spawned (child) sessions are visible in the session list */
 export const showSpawnedSessionsAtom = atomWithStorage<boolean>('show-spawned-sessions', true)
+
+/** Active persona for the current chat session (null = no persona selected) */
+export const chatActivePersonaAtom = atom<Persona | null>(null)
+
+/** Persisted mapping sessionId → personaId (survives page reload) */
+export const chatSessionPersonaMapAtom = atomWithStorage<Record<string, string>>('chat-session-personas', {})
 
 /** Derived: true when permission mode requires interactive approval (not bypassPermissions) */
 export const chatPermissionInteractiveAtom = atom((get) => {

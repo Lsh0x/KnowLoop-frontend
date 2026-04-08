@@ -147,6 +147,15 @@ export const api = {
 
   delete: <T>(endpoint: string, signal?: AbortSignal) =>
     request<T>(endpoint, { method: 'DELETE', signal }),
+
+  /** DELETE with JSON body (for endpoints that need a request body) */
+  deleteWithBody: <T>(endpoint: string, body: unknown, signal?: AbortSignal) =>
+    request<T>(endpoint, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    }),
 }
 
 // Query string builder

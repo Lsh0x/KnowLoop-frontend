@@ -23,6 +23,10 @@ export interface SessionMeta {
   workspaceSlug?: string
   /** Origin of this session if spawned (null = normal conversation) */
   spawnedBy?: import('@/types').SpawnedBy | null
+  /** Fork lifecycle status (active/completed/cancelled) — only set on fork sessions */
+  forkStatus?: string | null
+  /** Fork intent classification (job/role/scope/unknown) — determines lifecycle policy */
+  forkIntent?: string | null
 }
 
 export function useChat() {
@@ -1357,13 +1361,18 @@ export function useChat() {
     setPermissionOverride(mode)
   }, [sessionId, getWs, setPermissionOverride])
 
-  const changeModel = useCallback((model: string) => {
+  const changeModel = useCallback(async (model: string) => {
     if (!sessionId) return
-    const ws = getWs()
-    ws.sendSetModel(model)
-    // Optimistically update local state (server will confirm via model_changed event)
+    // Optimistically update local state
     setSessionModel(model)
-  }, [sessionId, getWs, setSessionModel])
+    try {
+      // REST API handles both active (sends CLI control request) and idle (Neo4j only) sessions
+      await chatApi.switchModel(sessionId, model)
+    } catch (e) {
+      console.error('Failed to switch model:', e)
+      // Revert optimistic update on failure — but don't block the UI
+    }
+  }, [sessionId, setSessionModel])
 
   const loadSession = useCallback(async (sid: string, targetTimestamp?: number) => {
     // Guard: if already on this session, do nothing (avoid WS disconnect/reconnect loop)
@@ -1390,7 +1399,7 @@ export function useChat() {
 
     // Fetch session metadata (cwd, project, permission mode) for display in header
     chatApi.getSession(sid).then((session) => {
-      setSessionMeta({ cwd: session.cwd, projectSlug: session.project_slug, workspaceSlug: session.workspace_slug, spawnedBy: session.spawned_by ?? null })
+      setSessionMeta({ cwd: session.cwd, projectSlug: session.project_slug, workspaceSlug: session.workspace_slug, spawnedBy: session.spawned_by ?? null, forkStatus: session.fork_status ?? null, forkIntent: session.fork_intent ?? null })
       // Restore the session's permission mode override
       setPermissionOverride((session.permission_mode as PermissionMode) ?? null)
       // Restore the session's model
@@ -1403,6 +1412,27 @@ export function useChat() {
     // WS will auto-connect via the useEffect above when sessionId changes
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setPermissionOverride and setSessionModel are stable Jotai setters
   }, [sessionId, getWs, setSessionId, setIsStreaming, setIsReplaying])
+
+  // Poll for fork status changes on the current session (10s interval)
+  // Detects auto-close (Job → completed) or reactivation without needing SSE
+  useEffect(() => {
+    if (!sessionId) return
+    const interval = setInterval(async () => {
+      try {
+        const session = await chatApi.getSession(sessionId)
+        setSessionMeta(prev => {
+          if (!prev) return prev
+          const newStatus = session.fork_status ?? null
+          const newIntent = session.fork_intent ?? null
+          if (prev.forkStatus === newStatus && prev.forkIntent === newIntent) return prev
+          return { ...prev, forkStatus: newStatus, forkIntent: newIntent }
+        })
+      } catch {
+        // Non-critical — just skip this poll
+      }
+    }, 10_000)
+    return () => clearInterval(interval)
+  }, [sessionId])
 
   return {
     messages,
